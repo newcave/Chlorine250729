@@ -37,13 +37,12 @@ with st.sidebar:
 
     st.markdown("---")
     # Evaporation effect
-    k_evap = st.number_input("Evaporation Rate Constant kevap (1/hr)", min_value=0.0, value=0.01, step=0.005)
+    k_evap = st.number_input("Evaporation Rate Constant k_evap (1/hr)", min_value=0.0, value=0.01, step=0.005)
 
     st.markdown("---")
     # Operational sensors
     turbidity = st.slider("Turbidity (NTU)", 0.0, 20.0, 1.0)
     flow_rate = st.number_input("Flow Rate (m³/h)", min_value=0.0, value=100.0)
-    ORP       = st.slider("ORP (mV)", -500, 1000, 300)
 
     st.markdown("---")
     # Process hydraulics: contact time
@@ -52,18 +51,19 @@ with st.sidebar:
     st.markdown("---")
     # Time settings
     max_time = st.slider("Maximum Prediction Time (hrs)", 1, 48, 8)
-    obs_time = st.slider("Observation Time (hrs)", 0.0, float(max_time), min(2.0, float(max_time)), step=0.1)
+
+    st.markdown("Observation Band")
+    obs_start = st.slider("Observation Start Time (hrs)", 0.0, float(max_time)-0.1, 0.0, step=0.1)
+    obs_end = st.slider("Observation End Time (hrs)", obs_start+0.1, float(max_time), min(obs_start+0.1, float(max_time)), step=0.1)
 
 # Time axis (hrs)
 time_range = np.linspace(0, max_time, 300)
 
 # EPA first-order decay model
-# Reaction: k_T = k20 * θ^(T - 20)
 def compute_decay_constant(k20, theta, temp):
     return k20 * (theta ** (temp - 20))
 
 def predict_chlorine(C0, k_T, k_evap, times):
-    # combined reaction + evaporation
     k_total = k_T + k_evap
     return C0 * np.exp(-k_total * times)
 
@@ -71,10 +71,12 @@ def predict_chlorine(C0, k_T, k_evap, times):
 k_T = compute_decay_constant(k20, theta, Temp)
 C_pred = predict_chlorine(Cl0, k_T, k_evap, time_range)
 
-# Simulated observation with noise (±10%)
+# Define observation times at 10-minute intervals within band
+obs_times = np.arange(obs_start, obs_end + 1e-6, 10/60)
+# Simulated observed values with ±10% noise
 np.random.seed(42)
-noise = np.random.uniform(-0.1, 0.1, size=time_range.shape)
-C_obs = C_pred * (1 + noise)
+noise_obs = np.random.uniform(-0.1, 0.1, size=obs_times.shape)
+C_obs_times = predict_chlorine(Cl0, k_T, k_evap, obs_times) * (1 + noise_obs)
 
 # Bounds: EPA guideline ± 20%
 C_low  = C_pred * 0.8
@@ -86,22 +88,21 @@ def plot_results():
     ax.plot(time_range, C_pred, label='Theoretical Prediction', linewidth=2)
     ax.plot(time_range, C_low,  label='Lower Bound (80%)', linestyle='--')
     ax.plot(time_range, C_high, label='Upper Bound (120%)', linestyle='--')
-    ax.scatter(obs_time, C_obs[np.argmin(np.abs(time_range-obs_time))], color='red', label='Observed Value', zorder=5)
-    # contact time marker
+    ax.scatter(obs_times, C_obs_times, color='red', label='Observed Values', zorder=5)
     ax.axvline(contact_time, color='gray', linestyle=':', label='Contact Time')
     ax.set_xlabel('Time (hrs)')
     ax.set_ylabel('Residual Chlorine (mg/L)')
-    ax.set_title('Residual Chlorine Prediction and Observation')
+    ax.set_title('Residual Chlorine Prediction and Observations')
     ax.legend()
     ax.grid(True)
     st.pyplot(fig)
 
 plot_results()
 
-# Anomaly Diagnosis based on bounds and rules
-def diagnose_epa(C_val, low, high, turb, flow, orp):
+# Anomaly Diagnosis based on last observation
+def diagnose_epa(C_val, low, high, turb, flow):
     if C_val > high:
-        if turb < 1 and orp > 400:
+        if turb < 1:
             return "Excessive Dosage Suspected: Good Water Quality"
         else:
             return "Adjust Dosage: Check Pretreatment"
@@ -115,14 +116,14 @@ def diagnose_epa(C_val, low, high, turb, flow, orp):
     else:
         return "Normal Operation"
 
-# Evaluate at observation time
-idx    = np.argmin(np.abs(time_range - obs_time))
-C_val  = C_obs[idx]
-low_val= C_low[idx]
-high_val= C_high[idx]
-diag    = diagnose_epa(C_val, low_val, high_val, turbidity, flow_rate, ORP)
+# Evaluate based on last observed point
+C_val   = C_obs_times[-1]
+low_val = predict_chlorine(Cl0, k_T, k_evap, np.array([obs_times[-1]]))[0] * 0.8
+high_val= predict_chlorine(Cl0, k_T, k_evap, np.array([obs_times[-1]]))[0] * 1.2
 
-st.subheader(f"Observation Time: {obs_time:.1f} hrs")
+diag    = diagnose_epa(C_val, low_val, high_val, turbidity, flow_rate)
+
+st.subheader(f"Last Observation Time: {obs_times[-1]:.2f} hrs")
 if diag == "Normal Operation":
     st.success("Normal Operation")
 else:
@@ -130,20 +131,20 @@ else:
 
 # Logging and CSV Download
 log = {
-    "Time (hrs)": obs_time,
+    "Last Obs Time (hrs)": round(float(obs_times[-1]), 2),
     "Observed Cl (mg/L)": round(float(C_val), 3),
     "Lower Bound (mg/L)": round(float(low_val),3),
     "Upper Bound (mg/L)": round(float(high_val),3),
     "Temperature (°C)": Temp,
     "pH": pH,
-    "Decay Constant k_T (1/hr)": round(k_T,4),
-    "Evaporation Constant k_evap (1/hr)": round(k_evap,4),
+    "Decay Const k_T (1/hr)": round(k_T,4),
+    "Evap Const k_evap (1/hr)": round(k_evap,4),
     "Turbidity (NTU)": turbidity,
     "Flow Rate (m³/h)": flow_rate,
     "Contact Time (hrs)": contact_time,
-    "ORP (mV)": ORP,
     "Diagnosis": diag
 }
+
 df_log = pd.DataFrame([log])
 st.download_button(
     "Download Report", df_log.to_csv(index=False), "epa_anomaly_report.csv", "text/csv"
