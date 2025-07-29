@@ -58,8 +58,7 @@ def compute_decay_constant(k20, theta, temp):
 def predict_chlorine(C0, k_T):
     return C0 * np.exp(-k_T * time_range)
 
-# Compute
-i) k_T = compute_decay_constant(k20, theta, Temp)
+# Compute decay constant and predictions
 k_T = compute_decay_constant(k20, theta, Temp)
 C_pred = predict_chlorine(Cl0, k_T)
 # Simulated observation with ±10% noise
