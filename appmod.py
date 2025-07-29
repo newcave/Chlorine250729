@@ -75,7 +75,7 @@ C_pred = predict_chlorine(Cl0, k_T, k_evap, time_range)
 obs_times = np.arange(obs_start, obs_end + 1e-6, 10/60)
 # Simulated observed values with ±10% noise
 np.random.seed(42)
-noise_obs = np.random.uniform(-0.1, 0.1, size=obs_times.shape)
+noise_obs = np.random.uniform(-0.14, 0.2, size=obs_times.shape)
 C_obs_times = predict_chlorine(Cl0, k_T, k_evap, obs_times) * (1 + noise_obs)
 
 # Bounds: EPA guideline ± 20%
